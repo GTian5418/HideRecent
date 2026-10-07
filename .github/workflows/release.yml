@@ -139,5 +139,6 @@ jobs:
             --repo "$REPO" \
             --target main \
             --title "$TAG" \
+            --draft=false \
             --notes "See https://github.com/GTian5418/HideRecent/releases/tag/$TAG" \
             "$APK"
