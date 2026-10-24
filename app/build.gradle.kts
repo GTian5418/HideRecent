@@ -37,8 +37,8 @@ android {
         // 必须是 34：targetSdk 35 会在 Android 15 上强制 edge-to-edge，
         // 导致 android:statusBarColor 失效、状态栏变透明、ActionBar 被顶出屏幕。
         targetSdk = 34
-        versionCode = 20260928
-        versionName = "v26.9.28"
+        versionCode = 20261025
+        versionName = "v26.10.25"
     }
 
     buildTypes {

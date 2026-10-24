@@ -65,6 +65,10 @@ object LauncherRecentHook {
         // 保证紧随其后的 filterTask 一定拿到最新名单（消除首次打开读到空快照的时序问题）
         count += hookRecentsLoad(module, loader)
 
+        // ColorOS 17（SystemLauncher 整体混淆）适配：真实类名已改为 ko.a / com.android.quickstep.f7
+        count += hookColorOs17Filter(module, loader)
+        count += hookColorOs17RecentsLoad(module, loader)
+
         // 注册配置变更广播接收器：模块进程每次保存配置都会广播，桌面进程即时更新缓存，
         // 不再依赖轮询 / 不再依赖模块进程长期存活
         registerPrefsReceiver(module)
@@ -306,6 +310,194 @@ object LauncherRecentHook {
         module.log(Log.INFO, TAG, "hooked OplusRecentTasksListImpl.loadTasksInBackground x$n")
         return n
     }
+
+    // ===== ColorOS 17（SystemLauncher 17.x 整体混淆）适配 =====
+    //
+    // 17.3.12 对照（源码文件名未混淆，但类名/成员名被 R8 改名）：
+    //   com.oplus.quickstep.data.OplusRecentTasksFilter  -> ko.a
+    //   filterTask(GroupTask)                            -> ko.a.c(la.j)
+    //   主过滤 filter(...)                                -> ko.a.d(int,int,GroupedTaskInfo,ArrayList):boolean
+    //   com.android.quickstep.util.GroupTask             -> la.j
+    //   com.android.quickstep.OplusRecentTasksListImpl   -> com.android.quickstep.f7
+    //   loadTasksInBackground()                          -> f7.h(int,boolean):RecentTasksList$TaskLoadResult
+    //
+    // 类名仍保留（未混淆）：com.android.wm.shell.shared.GroupedTaskInfo、
+    //   com.android.systemui.shared.recents.model.Task、com.android.quickstep.RecentsActivity
+    // 因此取包名时优先用这些稳定类型，而不是被改名的成员名。
+
+    private fun hookColorOs17Filter(module: Main, cl: ClassLoader): Int {
+        val filterCls = try {
+            cl.loadClass("ko.a")
+        } catch (_: Throwable) {
+            module.log(Log.WARN, TAG, "ko.a not found (not ColorOS 17?)")
+            return 0
+        }
+        var n = 0
+        n += hookColorOs17FilterD(module, filterCls)
+        n += hookColorOs17FilterTask(module, filterCls, cl)
+        return n
+    }
+
+    /**
+     * ko.a.d(int,int,GroupedTaskInfo,ArrayList): boolean —— 真正的主过滤，返回 true = 隐藏。
+     * 包名从 GroupedTaskInfo.e() 返回的 android.app.TaskInfo 取。
+     */
+    private fun hookColorOs17FilterD(module: Main, filterCls: Class<*>): Int {
+        val method = filterCls.declaredMethods.firstOrNull {
+            it.name == "d" && it.parameterTypes.size == 4 &&
+                it.returnType == java.lang.Boolean.TYPE
+        } ?: run {
+            module.log(Log.WARN, TAG, "ko.a.d(II..) not found")
+            return 0
+        }
+        // GroupedTaskInfo.e(): TaskInfo（task1；优先按名取 e()，退化到第一个返回 TaskInfo 的无参方法）
+        val groupedCls = method.parameterTypes[2]
+        val eMethod: Method? = groupedCls.methods.firstOrNull {
+            it.name == "e" && it.parameterTypes.isEmpty() &&
+                android.app.TaskInfo::class.java.isAssignableFrom(it.returnType)
+        } ?: groupedCls.methods.firstOrNull {
+            it.parameterTypes.isEmpty() &&
+                android.app.TaskInfo::class.java.isAssignableFrom(it.returnType)
+        }
+        if (eMethod == null) module.log(Log.WARN, TAG, "GroupedTaskInfo.e() not found, pkg may be null")
+        method.isAccessible = true
+        module.hook(method).setId("c17/filter/d").setExceptionMode(
+            XposedInterface.ExceptionMode.PROTECTIVE
+        ).intercept { chain ->
+            HookDecision.evaluateOrProceed(
+                proceed = { chain.proceed() },
+                onError = { module.log(Log.WARN, TAG, "c17 filter/d fallback: ${it.message}") }
+            ) {
+                val hidden = hiddenSnapshot.get()
+                if (hidden.isNotEmpty() && eMethod != null) {
+                    val groupedTask = chain.args.getOrNull(2)
+                    val pkg = groupedTask?.let { packageNameOfGroupedTask(it, eMethod) }
+                    if (pkg != null && pkg in hidden) {
+                        return@evaluateOrProceed true
+                    }
+                }
+                null
+            }
+        }
+        module.log(Log.INFO, TAG, "hooked ko.a.d (ColorOS 17 filter)")
+        return 1
+    }
+
+    /**
+     * ko.a.c(la.j): boolean —— 即老的 filterTask(GroupTask)，返回 true = 隐藏。
+     * 包名从 la.j 里包裹的 Task 取（按字段类型定位，比改名字段名更稳）。
+     */
+    private fun hookColorOs17FilterTask(module: Main, filterCls: Class<*>, cl: ClassLoader): Int {
+        val method = filterCls.declaredMethods.firstOrNull {
+            it.name == "c" && it.parameterTypes.size == 1 &&
+                it.returnType == java.lang.Boolean.TYPE
+        } ?: run {
+            module.log(Log.WARN, TAG, "ko.a.c(la.j) not found")
+            return 0
+        }
+        val groupTaskCls = method.parameterTypes[0]
+        // la.j 包裹的 Task：Task 类名未混淆，按类型找字段
+        val taskCls = try {
+            cl.loadClass("com.android.systemui.shared.recents.model.Task")
+        } catch (_: Throwable) {
+            null
+        }
+        val task1Field: Field? = taskCls?.let { tc ->
+            groupTaskCls.declaredFields.firstOrNull { it.type == tc }?.apply { isAccessible = true }
+        }
+        val getPackageName: Method? = try {
+            taskCls?.getMethod("getPackageName")
+        } catch (_: Throwable) {
+            null
+        }
+        if (task1Field == null || getPackageName == null) {
+            module.log(Log.WARN, TAG, "la.j Task field/getPackageName not found")
+        }
+        method.isAccessible = true
+        module.hook(method).setId("c17/filterTask").setExceptionMode(
+            XposedInterface.ExceptionMode.PROTECTIVE
+        ).intercept { chain ->
+            HookDecision.evaluateOrProceed(
+                proceed = { chain.proceed() },
+                onError = { module.log(Log.WARN, TAG, "c17 filterTask fallback: ${it.message}") }
+            ) {
+                val hidden = hiddenSnapshot.get()
+                if (hidden.isNotEmpty() && task1Field != null && getPackageName != null) {
+                    val groupTask = chain.args.firstOrNull()
+                    val task = groupTask?.let { runCatching { task1Field.get(it) }.getOrNull() }
+                    val pkg = task?.let { runCatching { getPackageName.invoke(it) as? String }.getOrNull() }
+                    if (pkg != null && pkg in hidden) {
+                        return@evaluateOrProceed true
+                    }
+                }
+                null
+            }
+        }
+        module.log(Log.INFO, TAG, "hooked ko.a.c (ColorOS 17 filterTask)")
+        return 1
+    }
+
+    /**
+     * com.android.quickstep.f7.h(int,boolean): RecentTasksList$TaskLoadResult
+     * —— 即老的 loadTasksInBackground：放行前同步刷新快照 + 补注册广播接收器（不干预返回值）。
+     */
+    private fun hookColorOs17RecentsLoad(module: Main, cl: ClassLoader): Int {
+        val cls = try {
+            cl.loadClass("com.android.quickstep.f7")
+        } catch (_: Throwable) {
+            module.log(Log.WARN, TAG, "f7 not found (not ColorOS 17?)")
+            return 0
+        }
+        val methods = cls.declaredMethods.filter {
+            it.name == "h" && it.parameterTypes.size == 2 &&
+                it.returnType.name == "com.android.quickstep.RecentTasksList\$TaskLoadResult"
+        }
+        if (methods.isEmpty()) {
+            module.log(Log.WARN, TAG, "f7.h(IZ) not found")
+            return 0
+        }
+        var n = 0
+        for (m in methods) {
+            m.isAccessible = true
+            module.hook(m).setId("c17/recentsLoad").setExceptionMode(
+                XposedInterface.ExceptionMode.PROTECTIVE
+            ).intercept { chain ->
+                HookDecision.evaluateOrProceed(
+                    proceed = { chain.proceed() },
+                    onError = { module.log(Log.WARN, TAG, "c17 recents-load fallback: ${it.message}") }
+                ) {
+                    registerPrefsReceiver(module)
+                    if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+                        refreshSnapshotAsync(module, "c17-recents-load")
+                    } else {
+                        runCatching { hiddenSnapshot.replace(module.hiddenPackages) }
+                            .onFailure {
+                                module.log(Log.WARN, TAG, "c17 recents-load refresh failed: ${it.message}")
+                            }
+                    }
+                    null
+                }
+            }
+            n++
+        }
+        module.log(Log.INFO, TAG, "hooked f7.h (ColorOS 17 loadTasksInBackground) x$n")
+        return n
+    }
+
+    /** GroupedTaskInfo.e() -> TaskInfo -> 包名 */
+    private fun packageNameOfGroupedTask(groupedTask: Any, eMethod: Method): String? {
+        val taskInfo = try {
+            eMethod.invoke(groupedTask)
+        } catch (_: Throwable) {
+            null
+        } as? android.app.TaskInfo ?: return null
+        return packageNameOfTaskInfo(taskInfo)
+    }
+
+    private fun packageNameOfTaskInfo(taskInfo: android.app.TaskInfo): String? =
+        taskInfo.baseActivity?.packageName
+            ?: taskInfo.baseIntent?.component?.packageName
+            ?: taskInfo.baseIntent?.`package`
 
     private fun parse(raw: String): Set<String> =
         if (raw.isEmpty()) emptySet() else raw.split(',').filter { it.isNotEmpty() }.toSet()

@@ -1,6 +1,6 @@
 name=最近任务隐藏
-version=v26.9.28
-versionCode=20260928
+version=v26.10.25
+versionCode=20261025
 author=TESE
 description=自定义最近任务应用显示/隐藏（ColorOS）
 minApiVersion=102

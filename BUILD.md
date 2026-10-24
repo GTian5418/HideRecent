@@ -391,7 +391,7 @@ jobs:
 项目根目录 `.github/workflows/release.yml` 是 Release workflow。  
 触发方式有两种：
 
-1.  **打 tag 推送**：`git tag v26.9.28 && git push origin v26.9.28` → 自动跑
+1.  **打 tag 推送**：`git tag v26.10.25 && git push origin v26.10.25` → 自动跑
 2.  **手动触发**：GitHub 仓库 → Actions → Release → Run workflow → 填 tag 名
 
 workflow 会自动：编译 release APK → zipalign → apksigner 一步签名 v1+v2+v3 → 上传 GitHub Release → 同步源码到 LSPosed 模块仓库 → 在 LSPosed 仓库创建 Release。
@@ -439,7 +439,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v26.9.28)"
+        description: "Release tag (e.g. v26.10.25)"
         required: true
         type: string
 
@@ -574,7 +574,7 @@ jobs:
 
 | 步骤 | 作用 | 注意事项 |
 | --- | --- | --- |
-| `on.push.tags: "v*"` | 打 `v` 开头的 tag 自动触发 | 如 `v26.9.28` |
+| `on.push.tags: "v*"` | 打 `v` 开头的 tag 自动触发 | 如 `v26.10.25` |
 | `fetch-depth: 0` | 完整克隆 | 推送到 LSPosed 仓库需要完整历史 |
 | `Align and Sign APK` | zipalign + apksigner 一步签名 | **不用 jarsigner**，避免破坏 ZIP LFH 结构 |
 | `Upload release APK` | 上传到源仓库 GitHub Release | `tag_name` 用 `inputs.tag \|\| github.ref_name` |
@@ -586,12 +586,12 @@ jobs:
 **方式一：打 tag 推送（推荐）**
 
 ```bash
-git tag v26.9.28
-git push origin v26.9.28
+git tag v26.10.25
+git push origin v26.10.25
 ```
 
 push 后 Actions 自动跑，完成后：
-1. 源仓库 Release 页面出现 `v26.9.28`，附带签名好的 APK
+1. 源仓库 Release 页面出现 `v26.10.25`，附带签名好的 APK
 2. LSPosed 模块仓库 `Xposed-Modules-Repo/top.gtian.hiderecent` 同步源码并创建 Release
 3. LSPosed 索引服务扫描到新 Release 后，`modules.lsposed.org` 自动更新（有延迟，通常数小时内）
 
@@ -671,6 +671,6 @@ gradle assembleRelease
 或直接打 tag 让 CI 自动出包：
 
 ```bash
-git tag v26.9.28
-git push origin v26.9.28
+git tag v26.10.25
+git push origin v26.10.25
 ```
